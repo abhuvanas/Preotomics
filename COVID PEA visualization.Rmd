@@ -1,0 +1,496 @@
+---
+title: "Covid pos vs neg"
+author: "Abishek Nirupan Bhuvanaratnam, University of Toronto"
+date: "2024-04-16"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r}
+setwd("/Users/abishekbhuvanaratnam/Downloads/MGH_Olink_COVID_Apr_27_2021")
+
+```
+
+
+```{r setup, include=FALSE}
+library(OlinkAnalyze)
+library(corrplot)
+library(heatmap3)
+library(Cairo)
+library(factoextra)
+library(ggplot2)
+library(pheatmap)
+library(cluster)
+library(dplyr)
+
+# Load data from text file (replace 'path_to_file.txt' with the actual file path)
+data1 <- read.table("/Users/abishekbhuvanaratnam/Downloads/MGH_Olink_COVID_Apr_27_2021/MGH_COVID_OLINK_NPX.txt", sep = ';', header = TRUE, stringsAsFactors = FALSE)
+data <- read.table("/Users/abishekbhuvanaratnam/Downloads/MGH_Olink_COVID_Apr_27_2021/MGH_COVID_Clinical_Info.txt", sep = ';', header = TRUE, stringsAsFactors = FALSE)
+
+# Display the first few rows of the dataframe to verify
+head(data)
+
+
+age_covid_summary <- data %>%
+  group_by(Age_cat, COVID) %>%
+  summarise(Count = n())
+
+```
+```{r}
+ggplot(age_covid_summary, aes(x = 'Age_cat', y = Count, fill = as.factor(COVID))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = c("blue", "red"), labels = c("Covid Negative", "Covid Positive")) +
+  labs(x = "Age Category", y = "Patient Count", fill = "COVID Status") +
+  theme_minimal() +
+  ggtitle("Comparison of Age Categories between COVID positive and Negative Patients")
+
+
+```
+
+
+```{r}
+data4<- read.csv("/Users/abishekbhuvanaratnam/Downloads/MGH_Olink_COVID_Apr_27_2021/pval.csv")
+
+
+data1_time0 <- filter(data1, Timepoint == "D0")
+
+# Merge the datasets on the columns they have in common (OlinkID and Assay)
+merged_data1 <- inner_join(data1_time0, data4, by = c("OlinkID", "Assay"))
+
+
+merged_data1$Colour <- ifelse(merged_data1$Threshold == "Significant", "blue", "grey")
+
+
+ggplot(merged_data1, aes(x = NPX, y = X.log10pval, color = Colour)) +
+  geom_point(alpha = 0.8) +
+  scale_color_identity() +
+  labs(x = "NPX DIfference (day 0)",
+       y = expression(-log[10](italic(p)~value)),
+       title = "volcano plot o fdifferentially expressed proteins") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggsave("volcano_plot.png", width = 10, height = 6, dpi = 300)
+
+
+```
+```{r}
+data3<- read.csv("/Users/abishekbhuvanaratnam/Downloads/MGH_Olink_COVID_Apr_27_2021/Percent Neutralization.csv")
+
+merge_data <- merge(data3, data, by = "subject_id")
+
+day0_data<- filter(merge_data, Day == 0)
+
+day0_data$COVID <- factor(day0_data$COVID, levels = c(0,1), labels = c("COVID-19-", "COVID-19+"))
+
+ggplot(day0_data, aes(x = COVID, y = Percent.Neutralization, fill = COVID))+
+  geom_boxplot() +
+  geom_jitter(width = 0.2, aes(color = COVID), size = 1.5, alpha = 0.6) +
+  labs(x = "COVID-19 Status", y = "Neutralization Level (%)") +
+  scale_fill_manual(values = c("lightblue", "lightgreen"),
+                    labels = c("COVID-19 Negative", "COVID-19 Positive")) +
+  theme_minimal() +
+  ggtitle("SARS-COV-2 Spike Pseudovirus Neutralization Levels")
+```
+
+
+```{r}
+library(dplyr)
+library(plotly)
+library(ggrepel)
+target_assays <- c("CXCL10", "CDON", "TCN2", "DDX58", "CCL7", "IFNG", "CXCL11",
+                        "CASC4", "C4BPB", "IFNG1", "CCL16", "CCL24", "CCL4", "CD200", "IL32", "FABP5")
+
+wonderful_data <- merge(merge_data, merged_data1, by = "subject_id") %>%
+  filter(Day == 0 & Timepoint == "D0")
+
+mean_npx <- wonderful_data %>%
+  group_by(Assay) %>%
+  summarize(
+    Mean_NPX_Covid_Pos = mean(NPX[COVID == 1]),
+    Mean_NPX_Covid_Neg = mean(NPX[COVID == 0]),
+    Adjusted_pval = -log10(mean(p.value[COVID == 1])),
+    Significant = first(Threshold)
+  ) %>%
+  mutate(Log2FoldChange = (Mean_NPX_Covid_Pos-Mean_NPX_Covid_Neg))
+
+
+ggplot(mean_npx, aes(x = Log2FoldChange, y = Adjusted_pval)) +
+  geom_point(aes(color = Significant), alpha = 0.5) +
+  scale_color_manual(values = c("Significant" = "blue", "Non-Significant" = "grey")) +
+  labs(title = "Volcano Plot of Differentially Expressed Proteins",
+       x = "NPX Difference (Day 0)",
+       y = "-Log10(pvalues)") +
+  coord_cartesian(ylim = c(0,30), xlim = c(-2,2)) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
+  geom_text_repel(data = subset(mean_npx, Assay %in% target_assays),
+            aes(label = Assay), vjust = -0.5, hjust = 1.1) +
+  theme_minimal()
+
+
+result_table1 <- mean_npx %>%
+  filter(Assay %in% target_assays) %>%
+  select(target_assays = Assay, Significance_level1 = Significant)
+print(result_table1)
+
+write.csv(result_table1, file = "result_table1.csv", row.names = FALSE)
+  
+#ggplotly(fig, tooltip = "text")
+
+#dont want to use 'Assay' (all will be displayed) only care about certain proteins
+# to find the most significantly regulated do top<- head(data[order(data$pval), 'protein_name'], #)
+```
+
+```{r}
+alt_paper <- read.csv("/Users/abishekbhuvanaratnam/Downloads/MGH_Olink_COVID_Apr_27_2021/severevshealthy_degresults-1.csv")
+library(tidyverse)
+library(RColorBrewer)
+library(ggrepel)
+library(tidyr)
+library(dplyr)
+#Healthy vs Severe COVID
+# Differential Analysis already accomplished
+# TFH like cells 
+
+target_assays2 <- c("CXCL10", "CDON", "TCN2", "DDX58", "CCL7", "IFNG", "CXCL11",
+                        "CASC4", "C4BPB", "IFNG1", "CCL16", "CCL24", "CCL4", "CD200", "IL32", "FABP5")
+
+#creating a simple volcano plot
+ggplot(alt_paper, aes(x = log2fc, y = -log10(pval))) +
+  geom_vline(xintercept = c(-0.6, 0.6), color = "gray", linetype = "dashed") +
+  geom_hline(yintercept = c(0.05), color = "gray", linetype = "dashed") + 
+  geom_point()
+
+#setting the threshold values on the dataset
+alt_paper$expression_level <- 'NO'
+alt_paper$expression_level[alt_paper$log2fc > 0.6 & alt_paper$pval < 0.05] <- 'UP'
+alt_paper$expression_level[alt_paper$log2fc < -0.6 & alt_paper$pval < 0.05] <- 'DOWN'
+
+
+
+ggplot(data = alt_paper, aes(x = log2fc, y = -log10(pval), col = expression_level)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("red", "grey", "blue"), 
+                     labels = c("Downregulated", "Not significant", "Upregulated")) +
+  coord_cartesian(ylim = c(0,200), xlim = c(-10, 10)) +
+  scale_x_continuous(breaks = seq(-10, 10, 2)) +
+  labs(title = "Thf-like cells in  COVID vs Healthy patients",
+       x = "log2FC",
+       y = "-log10(pvalues") + 
+  geom_text_repel(data = subset(alt_paper, gene_symbol %in% target_assays2),
+            aes(label = gene_symbol), vjust = -0.5, hjust = 1.1, color = "black") +
+  theme_minimal()
+
+alt_paper <- alt_paper %>%
+  mutate(Significance = if_else(expression_level == "NO", "Non-Significant", "Significant"))
+
+result_table3 <- alt_paper %>%
+  filter(gene_symbol %in% target_assays2) %>%
+  select(target_assays2 = gene_symbol, Significance_level = Significance)
+print(result_table3)
+#creating a table 
+result_table2 <- alt_paper %>%
+  filter(gene_symbol %in% target_assays2) %>%
+  select(target_assays2 = gene_symbol, Regulation_level = expression_level)
+print(result_table2)
+
+
+write.csv(result_table3, file = "result_table3.csv", row.names = FALSE)
+
+
+# I can try using interactive plotting using plotly
+# ggplotly (fig, tooltip = "text")
+
+```
+```{r}
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+wonderful_data3 <- wonderful_data %>% filter(Assay %in% c("CXCL10", "CDON", "TCN2", "DDX58", "CCL7", "IFNG", "CXCL11",
+                                          "CASC4", "C4BPB", "IFNG1", "CCL16", "CCL24", "CCL4", "CD200",
+                                        "IL32", "FABP5"))
+p<- ggplot(wonderful_data3, aes(x = factor(COVID), y = NPX, fill = factor(COVID))) +
+  geom_boxplot() +
+  facet_wrap(~Assay, scales = "free_y")
+  labs(title = "NPX Values of Proteins by COVID Status",
+       x = "Protein",
+       y = "NPX Value",
+       fill = "COVID Status") +
+  theme_minimal()
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text.x = element_text(size = 10, face = "bold")) # Adjust text angle for better legibility
+p
+# Display the plot
+ing the plot as a PNG file
+# Assuming merged_data1 and merge_data are your data frames
+
+wonderful_data
+
+```
+
+
+
+
+```{r}
+library(tidyverse)
+library(RColorBrewer)
+library(ggrepel)
+library(dplyr)
+
+filtered_datamerg <- merged_data1 %>%
+  filter(Timepoint == 	"D0")
+
+ggplot(filtered_datamerg, aes(x = NPX, y = X.log10pval, color = Colour)) + 
+  geom_vline(xintercept = c(-0.1, 0.1), col = 'gray', linetype = 'dashed') +
+  geom_hline(yintercept = c(1.3010299957), col = 'gray', linetype = 'dashed') +
+  geom_point(alpha = 0.8) +
+  scale_color_identity() +
+  labs(x = "NPX DIfference (day 0)",
+       y = expression(-log[10](italic(p)~value)),
+       title = "volcano plot of differentially expressed proteins") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggsave("volcano_plot.png", width = 10, height = 6, dpi = 300)
+```
+
+
+
+```{r}
+boxplotmerged<-  merge(merged_data1, data, by = "subject_id")
+
+prot_of_interest <- c("IFNG", "DDX58", "IFNGR1", "CXCL10", "CXCL11", "CCL7", "CCL16", "CCL24")
+data_filtered <- filter(boxplotmerged, Assay %in% prot_of_interest)
+
+data_filtered$COVID <- factor(data_filtered$'COVID',
+                              levels = c(0,1),
+                              labels = c("COVID -", "COVID +"))
+
+ggplot(data_filtered, aes(x = COVID, y = NPX, fill = COVID)) +
+  geom_boxplot() +
+  geom_point(position = position_dodge(width = 0.4), color = "black", alpha = 0.6, size = 0.8) +
+  facet_wrap(~ Assay, scales = "free_y") +
+  labs(title = "NPX Values by COVID Status",
+       x = "COVID Status",
+       y = "NPX Value",
+       fill = "COVID") +
+  scale_fill_manual(values = c("COVID -" = "turquoise", "COVID +" = "orange")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(tidyverse)
+library(ggplot2)
+
+# Assuming your data frame is named 'df' and is already read into R
+# If you haven't read your data into R, use the read.csv or appropriate function to load it
+# df <- read.csv("your_data_file.csv")
+
+# Gather the acuity scores into a long format suitable for plotting
+new_datat <- data %>%
+  gather(key = "Day", value = "Acuity", Acuity_0, Acuity_3, Acuity_7) %>%
+  mutate(Day = factor(gsub("Acuity_", "Day ", Day), levels = c("Day 0", "Day 3", "Day 7"))) %>%
+  group_by(Day, Acuity) %>%
+  summarise(Count = n()) %>%
+  mutate(Proportion = Count / sum(Count)) %>%
+  ungroup()
+
+# Calculate the total number of patients for labeling the bars
+total_counts <- new_datat %>%
+  group_by(Day) %>%
+  summarise(Total = sum(Count)) %>%
+  ungroup()
+
+# Add the total patient counts to the long_data for labeling on the plot
+new_datat <- new_datat %>%
+  left_join(total_counts, by = "Day")
+
+# Create the stacked bar plot
+ggplot(new_datat, aes(x = Day, y = Proportion, fill = factor(Acuity))) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste("N =", Total)), vjust = -0.5, position = position_dodge(width = 0.9)) +
+  geom_text(aes(label = scales::percent(Proportion, accuracy = 1), y = Proportion/2), position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set1", name = "Acuity Level") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(x = "Day of Collection", y = "Percentage of Patients", title = "Distribution of Patient Samples by Acuity Level") +
+  theme_minimal()
+
+acuity_counts <-table(data$Acuity_0)
+print(acuity_counts)
+
+acuity_count3 <-table(data$Acuity_3)
+print(acuity_count3)
+
+acuity_count7 <- table(data$Acuity_7)
+print(acuity_count7)
+
+library(ggplot2)
+library(dplyr)
+```
+
+```{r}
+# Data
+counts <- data.frame(
+  Day = rep(c("Day 0", "Day 3", "Day 7"), each = 5),
+  Acuity = factor(rep(1:5, times = 3)),
+  Frequency = c(3, 96, 186, 61, 38, 11, 91, 138, 66, 78, 24, 78, 69, 49, 164)
+)
+
+# Calculate the total number of patients for each day and the proportion for each acuity level
+counts <- counts %>%
+  group_by(Day) %>%
+  mutate(Total = sum(Frequency),
+         Proportion = Frequency / Total) %>%
+  ungroup()
+
+# Plot
+ggplot(counts, aes(x = Day, y = Proportion, fill = Acuity)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = scales::percent(Proportion, accuracy = 1)), position = position_stack(vjust = 0.5)) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_brewer(palette = "Set1", name = "Acuity Level") +
+  labs(x = "Day of Collection", y = "Percentage of Patients", title = "Distribution of Patient Samples by Acuity Level") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# This will display the plot in your R environment
+
+
+```
+
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+
+
+# Preprocess the data
+processed_data <- merge_data %>%
+  # Filter for days of interest
+  filter(Day %in% c(0, 3, 7)) %>%
+  # Categorize the severity based on acuity levels
+  mutate(
+    Severity = case_when(
+      Acuity_0 %in% 1:2 | Acuity_3 %in% 1:2 | Acuity_7 %in% 1:2 ~ "Severe",
+      TRUE ~ "Non-Severe"
+    )
+  ) %>%
+  # Filter for COVID positive patients
+  filter(COVID == 1)
+
+# Create box plots
+ggplot(processed_data, aes(x = factor(Day), y = Percent.Neutralization, fill = Severity)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Set1", name = "Patient Severity") +
+  labs(
+    x = "Day of Collection",
+    y = "Percent Neutralization",
+    title = "Neutralization Levels by Patient Severity Over Time"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+# Display the plot
+
+```
+
+
+
+
+```{r}
+
+library(tidyverse)
+library(ggplot2)
+library(scales)
+
+# Assuming data is loaded into a dataframe called merge_data
+# Create a severity factor based on Acuity levels
+merge_data$Severity <- ifelse(
+  merge_data$Acuity_0 %in% 1:2 | merge_data$Acuity_3 %in% 1:2 | merge_data$Acuity_7 %in% 1:2, 
+  "Severe", 
+  "Non-Severe"
+)
+
+# Filter for Days 0, 3, and 7, and COVID positive cases
+df_covid_positive <- merge_data %>% 
+  filter(Day %in% c(0, 3, 7), COVID == 1) %>% 
+  group_by(subject_id, Day, Severity) %>% 
+  summarise(Percent.Neutralization = mean(Percent.Neutralization, na.rm = TRUE), .groups = "drop")
+
+# Create a line plot
+ggplot(df_covid_positive, aes(x = as.factor(Day), y = Percent.Neutralization, group = subject_id, color = Severity)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~Severity) +
+  scale_y_continuous(labels = percent_format())
+  labs(x = "Day of Collection", y = "Percent Neutralization", title = "Neutralization Over Time by Severity") +
+  theme_minimal()
+  
+
+
+
+
+```
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(scales)
+
+# Assuming data is loaded into a dataframe called merge_data
+# Categorize the neutralization level at D3
+merge_data <- merge_data %>%
+  mutate(
+    D3_Neut_Category = case_when(
+      Day == 3 & Percent.Neutralization <= 0.25 ~ "0%–25%",
+      Day == 3 & Percent.Neutralization > 0.25 & Percent.Neutralization <= 0.50 ~ "25%–50%",
+      Day == 3 & Percent.Neutralization > 0.50 & Percent.Neutralization <= 0.75 ~ "50%–75%",
+      Day == 3 & Percent.Neutralization > 0.75 ~ "75%–100%",
+      TRUE ~ NA_character_  # Assign NA for other days to be filled forward
+    )
+  ) %>%
+  group_by(subject_id) %>%
+  fill(D3_Neut_Category, .direction = "downup")  # Fill the category for all days based on D3
+
+# Filter for Days 0, 3, and 7, and COVID positive cases
+df_covid_positive <- merge_data %>%
+  filter(COVID == 1, Day %in% c(0, 3, 7)) %>%
+  group_by(subject_id, Day, Severity, D3_Neut_Category) %>%
+  summarise(Percent.Neutralization = mean(Percent.Neutralization, na.rm = TRUE), .groups = "drop")
+
+# Define custom colors for the categories
+custom_colors <- c("0%–25%" = "orange", "25%–50%" = "green", "50%–75%" = "blue", "75%–100%" = "purple")
+
+# Create a line plot with color-coded neutralization levels
+ggplot(df_covid_positive, aes(x = as.factor(Day), y = Percent.Neutralization,
+                               group = subject_id, color = D3_Neut_Category)) +
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = custom_colors) +
+  facet_wrap(~Severity) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(x = "Day of Collection", y = "Percent Neutralization (%)",
+       title = "Neutralization Over Time by Severity",
+       color = "D3 Neutralization Level") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+
+
+
+
+```
+
+
